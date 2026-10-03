@@ -137,7 +137,7 @@ Expected outputs:
 - `dist\PackManager.exe` and its deployed runtime files.
 - `build\Release\PackManagerFormatTest.exe`, the C++ helper used by the
   interoperability tests.
-- When Inno Setup is available, `dist\PackManager-Setup-0.1.0.exe`.
+- When Inno Setup is available, `dist\PackManager-Setup-0.1.1.exe`.
 
 To produce a ZIP of the portable folder after building:
 
@@ -148,7 +148,7 @@ To produce a ZIP of the portable folder after building:
 The script accepts an optional version argument:
 
 ```powershell
-.\package-portable.ps1 -Version "0.1.0"
+.\package-portable.ps1 -Version "0.1.1"
 ```
 
 ## Run the tests
@@ -368,13 +368,13 @@ The portable build is the contents of `dist\`. Copy the full folder, not just
 Create an archive after building:
 
 ```powershell
-.\package-portable.ps1 -Version "0.1.0"
+.\package-portable.ps1 -Version "0.1.1"
 ```
 
 The installer definition is `installer\PackManager.iss`. `build.ps1` invokes
 Inno Setup when it can find `ISCC.exe` on `PATH` or in the standard Inno Setup
 6 installation directory. Installer metadata currently defines version
-`0.1.0`; update it together with the CMake project version and portable
+`0.1.1`; update it together with the CMake project version and portable
 archive version when preparing a release.
 
 ## Repository layout
