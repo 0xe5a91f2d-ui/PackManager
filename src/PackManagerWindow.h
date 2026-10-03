@@ -4,6 +4,7 @@
 
 #include <QMainWindow>
 #include <QMenu>
+#include <QPointer>
 #include <QStack>
 #include <QSet>
 #include <QStringList>
@@ -175,7 +176,7 @@ private:
     QAction* redoAction_ = nullptr;
     QAction* darkThemeAction_ = nullptr;
     QAction* englishAction_ = nullptr;
-    QProgressDialog* activeProgress_ = nullptr;
+    QPointer<QProgressDialog> activeProgress_;
     QFutureWatcher<QString>* packageWriteWatcher_ = nullptr;
     QFutureWatcher<QStringList>* extractionWatcher_ = nullptr;
     QFutureWatcher<QString>* playbackExtractionWatcher_ = nullptr;

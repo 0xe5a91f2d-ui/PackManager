@@ -1257,13 +1257,16 @@ void PackManagerWindow::openPackage()
     activeProgress_->setWindowModality(Qt::WindowModal);
     activeProgress_->setMinimumDuration(0);
     activeProgress_->show();
+    const QPointer<QProgressDialog> progressDialog = activeProgress_;
     auto* watcher = new QFutureWatcher<PackageValidationResult>(this);
     packageReadWatcher_ = watcher;
     connect(watcher, &QFutureWatcher<PackageValidationResult>::finished, this,
-            [this, watcher] {
-        if (activeProgress_ != nullptr) {
-            activeProgress_->deleteLater();
-            activeProgress_ = nullptr;
+            [this, watcher, progressDialog] {
+        if (progressDialog != nullptr) {
+            progressDialog->deleteLater();
+            if (activeProgress_ == progressDialog) {
+                activeProgress_ = nullptr;
+            }
         }
         try {
             PackageValidationResult result = watcher->result();
@@ -1313,21 +1316,21 @@ void PackManagerWindow::openPackage()
             packageReadWatcher_ = nullptr;
         }
     });
-    watcher->setFuture(QtConcurrent::run([this, path] {
+    watcher->setFuture(QtConcurrent::run([this, path, progressDialog] {
         PackageValidationResult result;
         result.path = path;
         result.entries = readSafeTensors(path, &result.report, &result.metadata);
         verifySafeTensorsIntegrity(
             path, result.entries, &result.report.issues,
-            [this](quint64 completed, quint64 total) {
+            [this, progressDialog](quint64 completed, quint64 total) {
                 const int value = total == 0 ? 1000 : static_cast<int>(
                     std::min(1000.0, static_cast<double>(completed) * 1000.0
                                               / static_cast<double>(total)));
-                QMetaObject::invokeMethod(this, [this, value, completed, total] {
-                    if (activeProgress_ != nullptr) {
-                        activeProgress_->setRange(0, 1000);
-                        activeProgress_->setValue(value);
-                        activeProgress_->setLabelText(
+                QMetaObject::invokeMethod(this, [this, progressDialog, value, completed, total] {
+                    if (progressDialog != nullptr) {
+                        progressDialog->setRange(0, 1000);
+                        progressDialog->setValue(value);
+                        progressDialog->setLabelText(
                             QStringLiteral("Dosya bütünlüğü doğrulanıyor: %1 / %2")
                                 .arg(completed).arg(total));
                     }
@@ -2905,49 +2908,7 @@ bool PackManagerWindow::exportPackage()
                              QStringLiteral("Önce listeye en az bir video ekleyin."));
         return false;
     }
-    quint64 estimatedSize = 0;
-    QStringList warnings;
-    QSet<QString> seenMedia;
-    for (const VideoEntry& entry : entries_) {
-        const quint64 size = entryMediaSize(entry);
-        if (size <= std::numeric_limits<quint64>::max() - estimatedSize) {
-            estimatedSize += size;
-        }
-        if (!entry.videoIsEmbedded && !QFileInfo(entry.videoPath).isFile()) {
-            warnings.push_back(QStringLiteral("Eksik video: %1").arg(entry.videoPath));
-        }
-        const QString videoKey = entry.videoIsEmbedded
-            ? QStringLiteral("%1#%2:%3").arg(canonicalPath(entry.assetContainerPath))
-                  .arg(entry.videoOffset).arg(entry.videoSize)
-            : canonicalPath(entry.videoPath);
-        if (seenMedia.contains(videoKey)) {
-            warnings.push_back(QStringLiteral("Yinelenen video kaynağı: %1").arg(entry.title));
-        }
-        seenMedia.insert(videoKey);
-        if (!entry.coverPath.isEmpty()) {
-            if (!entry.coverIsEmbedded && !QFileInfo(entry.coverPath).isFile()) {
-                warnings.push_back(QStringLiteral("Eksik kapak: %1").arg(entry.coverPath));
-            }
-            const QString coverKey = entry.coverIsEmbedded
-                ? QStringLiteral("%1#%2:%3").arg(canonicalPath(entry.assetContainerPath))
-                      .arg(entry.coverOffset).arg(entry.coverSize)
-                : canonicalPath(entry.coverPath);
-            if (seenMedia.contains(coverKey)) {
-                warnings.push_back(QStringLiteral("Yinelenen medya: %1").arg(entry.coverPath));
-            }
-            seenMedia.insert(coverKey);
-        }
-    }
-    QString preflight = QStringLiteral("Videolar: %1\nTahmini medya boyutu: %2")
-                            .arg(entries_.size()).arg(humanSize(estimatedSize));
-    if (!warnings.isEmpty()) {
-        preflight += QStringLiteral("\n\nUyarılar:\n%1").arg(warnings.join(QLatin1Char('\n')));
-    }
-    preflight += QStringLiteral("\n\nPaketi kaydetmeye devam edilsin mi?");
-    if (QMessageBox::question(this, QStringLiteral("Dışa aktarma önizlemesi"),
-                              preflight) != QMessageBox::Yes) {
-        return false;
-    }
+
     const QString destination = QFileDialog::getSaveFileName(
         this, QStringLiteral("Paketi kaydet"),
         packagePath_.isEmpty() ? QStringLiteral("video_paketi.safetensors") : packagePath_,
@@ -2955,12 +2916,15 @@ bool PackManagerWindow::exportPackage()
     if (destination.isEmpty()) {
         return false;
     }
+
     QString outputPath = destination;
     if (!outputPath.endsWith(QStringLiteral(".safetensors"), Qt::CaseInsensitive)) {
         outputPath += QStringLiteral(".safetensors");
     }
 
-    exportPackageEntries(entries_, outputPath);
+    const bool embedMedia = true;
+    QString signingAuthor;
+    startPackageExport(entries_, outputPath, true, embedMedia, signingAuthor);
     return true;
 }
 
@@ -3006,42 +2970,8 @@ void PackManagerWindow::exportPackageEntries(
     if (!outputPath.endsWith(QStringLiteral(".safetensors"), Qt::CaseInsensitive)) {
         outputPath += QStringLiteral(".safetensors");
     }
-    QMessageBox storageChoice(this);
-    storageChoice.setWindowTitle(QStringLiteral("Medya depolama"));
-    storageChoice.setText(QStringLiteral(
-        "Hugging Face ve başka SafeTensors okuyucularıyla kullanmak için medyayı "
-        "doğrudan dosyanın içine gömün. Harici klasör seçeneği Hugging Face'e "
-        "tek dosya olarak yüklendiğinde medya içermez."));
-    QPushButton* embedButton = storageChoice.addButton(
-        QStringLiteral("Medya tensorlarını göm (Hugging Face)"), QMessageBox::AcceptRole);
-    storageChoice.addButton(QStringLiteral("Yan klasörde sakla"), QMessageBox::ActionRole);
-    storageChoice.addButton(QMessageBox::Cancel);
-    storageChoice.exec();
-    if (storageChoice.clickedButton() == nullptr
-        || storageChoice.buttonRole(storageChoice.clickedButton()) == QMessageBox::RejectRole) {
-        return;
-    }
-    const bool embedMedia = storageChoice.clickedButton() == embedButton;
+    const bool embedMedia = true;
     QString signingAuthor;
-    const bool sign = QMessageBox::question(
-        this, QStringLiteral("Dijital imza"),
-        QStringLiteral("Bu paketi Windows hesabınıza bağlı yerel imza anahtarıyla imzalamak ister misiniz?"),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
-    if (sign) {
-        bool accepted = false;
-        signingAuthor = QInputDialog::getText(
-            this, QStringLiteral("İmzalayan kimliği"),
-            QStringLiteral("Paketle gösterilecek ad:"),
-            QLineEdit::Normal,
-            QSettings().value(QStringLiteral("package/signingAuthor")).toString(),
-            &accepted).trimmed();
-        if (!accepted || signingAuthor.isEmpty()) {
-            QMessageBox::warning(this, QStringLiteral("İmza iptal edildi"),
-                                 QStringLiteral("Dijital imza için ad boş bırakılamaz."));
-            return;
-        }
-        QSettings().setValue(QStringLiteral("package/signingAuthor"), signingAuthor);
-    }
     startPackageExport(entries, outputPath, &entries == &entries_, embedMedia,
                        signingAuthor);
 }
